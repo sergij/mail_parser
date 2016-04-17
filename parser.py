@@ -1,7 +1,10 @@
 import imaplib
 import getpass
 import os
+import email
 
+EMAIL_FOLDER = 'INBOX'
+IMAP_SERVER = 'imap.yandex.ru'
 
 class bcolors:
     HEADER = '\033[95m'
@@ -19,10 +22,9 @@ def pretty_print(message, klass=bcolors.OKGREEN):
 
 
 class MailReader(object):
-    IMAP_SERVER = 'imap.yandex.ru'
 
     def __init__(self):
-        self._mail = imaplib.IMAP4_SSL(self.IMAP_SERVER)
+        self._mail = imaplib.IMAP4_SSL(IMAP_SERVER)
 
     def _login(self):
         login = raw_input("Yandex login: ")
@@ -46,10 +48,11 @@ class MailReader(object):
         pretty_print("In email folder {} [{}] emails.".format(folder, next(iter(data), 0)))
         return self._mail.uid('search', None, "ALL")[1][0].split()
 
-    def get_email_body(self, email_uid):
-        result, data = self._mail.uid('fetch', email_uid, '(RFC822)')
-        raw_email = data[0][1]
-        return raw_email
+    def get_email_body(self, email_uids):
+        print email_uids
+        result, data = self._mail.uid('fetch', ','.join(email_uids), '(RFC822)')
+        for header, raw_email in data[::2]:
+            yield header.split('UID ', 1)[1].split(' ', 1)[0], raw_email
 
 
 class MailParser(object):
@@ -82,23 +85,34 @@ class MailParser(object):
             pretty_print("Localy removed {} emails.".format(len(removed)), bcolors.OKBLUE)
 
     def get_local_email_uids(self):
-        return (o.split('.', 1)[0] for o in os.listdir(self._folder))
+        return (o.split('.', 1)[0] for o in os.listdir(self._folder) if '.dat' in o)
 
     def is_email_stored_localy(self, email_uid):
         return email_uid in self.get_local_email_uids()
 
+    def read_email(self, uid):
+        with open(os.path.join(self._folder, self._local_email_file_name(uid)), 'r') as email_file:
+            return email_file.read()
 
-def main():
-    mail = MailReader()
-    mail.login()
-    email_uids = mail.get_emails_uids("INBOX")
-    mail_parser = MailParser()
+
+def read_and_store_emails(mail_client, mail_parser, email_uids):
     mail_parser.clear_non_existing(email_uids)
 
-    for email_uid in email_uids:
-        if not mail_parser.is_email_stored_localy(email_uid):
-            body = mail.get_email_body(email_uid)
-            mail_parser.add_email(email_uid, body)
+    for email_uid, email_body in mail_client.get_email_body(
+        [email_uid for email_uid in email_uids if not mail_parser.is_email_stored_localy(email_uid)]
+    ):
+        mail_parser.add_email(email_uid, email_body)
+
+def main():   
+    mail = MailReader()
+    mail.login()
+    email_uids = mail.get_emails_uids(EMAIL_FOLDER)
+
+    mail_parser = MailParser()
+    read_and_store_emails(mail, mail_parser, email_uids)
+    email_uids = list(mail_parser.get_local_email_uids())
+    for uid in email_uids:
+        print email.message_from_string(mail_parser.read_email(uid))
 
 
 if __name__ == '__main__':
